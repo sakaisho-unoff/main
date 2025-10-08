@@ -3,16 +3,16 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Firebase Chat</title>
+  <title>Firebase Chat (Compat)</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
   <script src="https://unpkg.com/babel-standalone@6/babel.min.js"></script>
 
-  <!-- Firebase SDK -->
-  <script src="https://www.gstatic.com/firebasejs/11.0.1/firebase-app.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/11.0.1/firebase-auth.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/11.0.1/firebase-database.js"></script>
+  <!-- ✅ Firebase 互換SDK (v9 compat) -->
+  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-database-compat.js"></script>
 
   <style>
     body { background: linear-gradient(180deg,#0f172a 0%, #071032 100%); color:white; }
@@ -25,7 +25,7 @@
   <script type="text/babel">
 const { useState, useEffect } = React;
 
-// --- Firebase setup ---
+// --- Firebase setup (互換版) ---
 const firebaseConfig = {
   apiKey: "AIzaSyAZsF7_B7FaM_oLDHbLXO0HEB-QEOccN2o",
   authDomain: "pages-4fe21.firebaseapp.com",
@@ -48,20 +48,16 @@ function App() {
   const [messages, setMessages] = useState([]);
   const [announcement, setAnnouncement] = useState(null);
 
-  // Firebase auth listener
   useEffect(() => {
     const unsub = auth.onAuthStateChanged(u => {
       setUser(u);
-      if (!u) return;
-      loadChannels();
+      if (u) loadChannels();
     });
     return () => unsub();
   }, []);
 
-  // Load channels from Realtime DB
   const loadChannels = () => {
-    const ref = db.ref("channels");
-    ref.on("value", snap => {
+    db.ref("channels").on("value", snap => {
       const val = snap.val() || {};
       const arr = Object.entries(val).map(([id, c]) => ({ id, ...c }));
       setChannels(arr);
@@ -69,54 +65,40 @@ function App() {
     });
   };
 
-  // Load messages for selected channel
   useEffect(() => {
     if (!selectedChannel) return;
-    const ref = db.ref(`messages/${selectedChannel}`);
-    ref.on("value", snap => {
+    db.ref(`messages/${selectedChannel}`).on("value", snap => {
       const val = snap.val() || {};
       const arr = Object.entries(val).map(([id, m]) => ({ id, ...m }));
       setMessages(arr);
     });
-    return () => db.ref(`messages/${selectedChannel}`).off();
   }, [selectedChannel]);
 
-  // Load announcements
   useEffect(() => {
-    const ref = db.ref("announcement");
-    ref.on("value", snap => setAnnouncement(snap.val()));
+    db.ref("announcement").on("value", snap => setAnnouncement(snap.val()));
   }, []);
 
-  const sendMessage = (text) => {
+  const sendMessage = text => {
     if (!user || !selectedChannel) return;
-    const ref = db.ref(`messages/${selectedChannel}`).push();
-    ref.set({
+    db.ref(`messages/${selectedChannel}`).push({
       by: user.email,
       text,
       ts: Date.now()
     });
   };
 
-  const logout = () => auth.signOut();
-
   return (
     <div className="max-w-6xl mx-auto grid grid-cols-12 gap-6">
       <div className="col-span-12 md:col-span-3 glass rounded-2xl p-4">
-        <Header user={user} onLogout={logout}/>
+        <Header user={user}/>
         <hr className="my-3 border-white/10" />
-        {user && (
-          <>
-            <Channels
-              channels={channels}
-              selected={selectedChannel}
-              onSelect={setSelectedChannel}
-            />
-            {user.email === "admin@chat.local" && (
-              <AdminPanel />
-            )}
-          </>
-        )}
-        {!user && <AuthBox />}
+        {user
+          ? <React.Fragment>
+              <Channels channels={channels} selected={selectedChannel} onSelect={setSelectedChannel} />
+              {user.email === "admin@chat.local" && <AdminPanel />}
+            </React.Fragment>
+          : <AuthBox />
+        }
       </div>
 
       <div className="col-span-12 md:col-span-9 glass rounded-2xl p-4 flex flex-col h-[75vh]">
@@ -126,7 +108,6 @@ function App() {
             <div className="text-sm">{announcement.text}</div>
           </div>
         )}
-
         <div className="flex-1 overflow-auto p-3 bg-white/5 rounded-lg">
           {messages.map(m => (
             <div key={m.id} className="mb-2">
@@ -141,19 +122,15 @@ function App() {
   );
 }
 
-// ---------- Components ----------
-function Header({user, onLogout}) {
+function Header({user}) {
   return (
     <div>
       <h1 className="text-xl font-bold">Firebase Chat</h1>
-      {user ? (
-        <div className="mt-2">
-          <div className="text-sm text-white/70">{user.email}</div>
-          <button onClick={onLogout} className="mt-1 px-3 py-1 rounded bg-white/10">Logout</button>
-        </div>
-      ) : (
-        <div className="text-sm text-white/60">Please login</div>
-      )}
+      {user
+        ? <div className="mt-2">
+            <div className="text-sm text-white/70">{user.email}</div>
+          </div>
+        : <div className="text-sm text-white/60">Please login</div>}
     </div>
   );
 }
@@ -165,13 +142,12 @@ function AuthBox() {
   const [error, setError] = useState("");
 
   const submit = async () => {
-    setError("");
     try {
-      if (mode === "login") {
+      setError("");
+      if (mode === "login")
         await auth.signInWithEmailAndPassword(email, password);
-      } else {
+      else
         await auth.createUserWithEmailAndPassword(email, password);
-      }
     } catch (e) {
       setError(e.message);
     }
