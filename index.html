@@ -1,0 +1,257 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Firebase Chat</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/babel-standalone@6/babel.min.js"></script>
+
+  <!-- Firebase SDK -->
+  <script src="https://www.gstatic.com/firebasejs/11.0.1/firebase-app.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/11.0.1/firebase-auth.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/11.0.1/firebase-database.js"></script>
+
+  <style>
+    body { background: linear-gradient(180deg,#0f172a 0%, #071032 100%); color:white; }
+    .glass { background: rgba(255,255,255,0.05); backdrop-filter: blur(8px); }
+  </style>
+</head>
+<body class="min-h-screen p-6">
+  <div id="root"></div>
+
+  <script type="text/babel">
+const { useState, useEffect } = React;
+
+// --- Firebase setup ---
+const firebaseConfig = {
+  apiKey: "AIzaSyAZsF7_B7FaM_oLDHbLXO0HEB-QEOccN2o",
+  authDomain: "pages-4fe21.firebaseapp.com",
+  databaseURL: "https://pages-4fe21-default-rtdb.firebaseio.com",
+  projectId: "pages-4fe21",
+  storageBucket: "pages-4fe21.firebasestorage.app",
+  messagingSenderId: "713235884971",
+  appId: "1:713235884971:web:39499d51066a71da75c0ee",
+  measurementId: "G-LR795Y4WXR"
+};
+
+firebase.initializeApp(firebaseConfig);
+const auth = firebase.auth();
+const db = firebase.database();
+
+function App() {
+  const [user, setUser] = useState(null);
+  const [channels, setChannels] = useState([]);
+  const [selectedChannel, setSelectedChannel] = useState(null);
+  const [messages, setMessages] = useState([]);
+  const [announcement, setAnnouncement] = useState(null);
+
+  // Firebase auth listener
+  useEffect(() => {
+    const unsub = auth.onAuthStateChanged(u => {
+      setUser(u);
+      if (!u) return;
+      loadChannels();
+    });
+    return () => unsub();
+  }, []);
+
+  // Load channels from Realtime DB
+  const loadChannels = () => {
+    const ref = db.ref("channels");
+    ref.on("value", snap => {
+      const val = snap.val() || {};
+      const arr = Object.entries(val).map(([id, c]) => ({ id, ...c }));
+      setChannels(arr);
+      if (!selectedChannel && arr.length) setSelectedChannel(arr[0].id);
+    });
+  };
+
+  // Load messages for selected channel
+  useEffect(() => {
+    if (!selectedChannel) return;
+    const ref = db.ref(`messages/${selectedChannel}`);
+    ref.on("value", snap => {
+      const val = snap.val() || {};
+      const arr = Object.entries(val).map(([id, m]) => ({ id, ...m }));
+      setMessages(arr);
+    });
+    return () => db.ref(`messages/${selectedChannel}`).off();
+  }, [selectedChannel]);
+
+  // Load announcements
+  useEffect(() => {
+    const ref = db.ref("announcement");
+    ref.on("value", snap => setAnnouncement(snap.val()));
+  }, []);
+
+  const sendMessage = (text) => {
+    if (!user || !selectedChannel) return;
+    const ref = db.ref(`messages/${selectedChannel}`).push();
+    ref.set({
+      by: user.email,
+      text,
+      ts: Date.now()
+    });
+  };
+
+  const logout = () => auth.signOut();
+
+  return (
+    <div className="max-w-6xl mx-auto grid grid-cols-12 gap-6">
+      <div className="col-span-12 md:col-span-3 glass rounded-2xl p-4">
+        <Header user={user} onLogout={logout}/>
+        <hr className="my-3 border-white/10" />
+        {user && (
+          <>
+            <Channels
+              channels={channels}
+              selected={selectedChannel}
+              onSelect={setSelectedChannel}
+            />
+            {user.email === "admin@chat.local" && (
+              <AdminPanel />
+            )}
+          </>
+        )}
+        {!user && <AuthBox />}
+      </div>
+
+      <div className="col-span-12 md:col-span-9 glass rounded-2xl p-4 flex flex-col h-[75vh]">
+        {announcement && (
+          <div className="mb-2 p-3 bg-yellow-500/10 border border-yellow-400 rounded-md">
+            <div className="text-sm font-bold">Announcement</div>
+            <div className="text-sm">{announcement.text}</div>
+          </div>
+        )}
+
+        <div className="flex-1 overflow-auto p-3 bg-white/5 rounded-lg">
+          {messages.map(m => (
+            <div key={m.id} className="mb-2">
+              <div className="text-xs text-white/60">{m.by} - {new Date(m.ts).toLocaleTimeString()}</div>
+              <div>{m.text}</div>
+            </div>
+          ))}
+        </div>
+        <Composer onSend={sendMessage}/>
+      </div>
+    </div>
+  );
+}
+
+// ---------- Components ----------
+function Header({user, onLogout}) {
+  return (
+    <div>
+      <h1 className="text-xl font-bold">Firebase Chat</h1>
+      {user ? (
+        <div className="mt-2">
+          <div className="text-sm text-white/70">{user.email}</div>
+          <button onClick={onLogout} className="mt-1 px-3 py-1 rounded bg-white/10">Logout</button>
+        </div>
+      ) : (
+        <div className="text-sm text-white/60">Please login</div>
+      )}
+    </div>
+  );
+}
+
+function AuthBox() {
+  const [mode, setMode] = useState("login");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+
+  const submit = async () => {
+    setError("");
+    try {
+      if (mode === "login") {
+        await auth.signInWithEmailAndPassword(email, password);
+      } else {
+        await auth.createUserWithEmailAndPassword(email, password);
+      }
+    } catch (e) {
+      setError(e.message);
+    }
+  };
+
+  return (
+    <div className="mt-3">
+      <div className="flex gap-2 bg-white/5 rounded p-1">
+        <button onClick={()=>setMode('login')} className={`flex-1 py-1 rounded ${mode==='login'?'bg-white/10':''}`}>Login</button>
+        <button onClick={()=>setMode('register')} className={`flex-1 py-1 rounded ${mode==='register'?'bg-white/10':''}`}>Register</button>
+      </div>
+      <input value={email} onChange={e=>setEmail(e.target.value)} placeholder="Email" className="w-full mt-2 px-3 py-2 rounded bg-white/10"/>
+      <input value={password} onChange={e=>setPassword(e.target.value)} type="password" placeholder="Password" className="w-full mt-2 px-3 py-2 rounded bg-white/10"/>
+      {error && <div className="text-xs text-red-400 mt-1">{error}</div>}
+      <button onClick={submit} className="w-full mt-3 py-2 rounded bg-indigo-600">{mode==='login'?'Login':'Register'}</button>
+      <div className="text-xs text-white/60 mt-2">Admin user: admin@chat.local / AdminPassword</div>
+    </div>
+  );
+}
+
+function Channels({channels, selected, onSelect}) {
+  return (
+    <div className="mt-3">
+      <div className="text-sm font-semibold mb-2">Channels</div>
+      <div className="space-y-1">
+        {channels.map(c => (
+          <button key={c.id} onClick={()=>onSelect(c.id)} className={`block w-full text-left px-3 py-1 rounded ${selected===c.id?'bg-white/10':'hover:bg-white/5'}`}>#{c.name}</button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function Composer({onSend}) {
+  const [text, setText] = useState("");
+  const send = () => {
+    if (!text.trim()) return;
+    onSend(text.trim());
+    setText("");
+  };
+  return (
+    <div className="mt-3 flex gap-2">
+      <input value={text} onChange={e=>setText(e.target.value)} onKeyDown={e=>e.key==='Enter'&&send()} placeholder="Type a message..." className="flex-1 px-3 py-2 rounded bg-white/10"/>
+      <button onClick={send} className="px-4 py-2 rounded bg-indigo-600">Send</button>
+    </div>
+  );
+}
+
+function AdminPanel() {
+  const [channelName, setChannelName] = useState("");
+  const [announce, setAnnounce] = useState("");
+
+  const addChannel = () => {
+    const id = db.ref("channels").push().key;
+    db.ref("channels/"+id).set({ name: channelName });
+    setChannelName("");
+  };
+
+  const postAnnouncement = () => {
+    db.ref("announcement").set({ text: announce, ts: Date.now() });
+    setAnnounce("");
+  };
+
+  return (
+    <div className="mt-4 p-3 bg-white/5 rounded-lg space-y-3">
+      <div>
+        <div className="text-sm font-semibold mb-1">Add Channel</div>
+        <input value={channelName} onChange={e=>setChannelName(e.target.value)} placeholder="Channel name" className="w-full px-2 py-1 rounded bg-white/10"/>
+        <button onClick={addChannel} className="w-full mt-2 py-1 bg-indigo-600 rounded">Add</button>
+      </div>
+      <div>
+        <div className="text-sm font-semibold mb-1">Announcement</div>
+        <textarea value={announce} onChange={e=>setAnnounce(e.target.value)} className="w-full p-2 rounded bg-white/10"></textarea>
+        <button onClick={postAnnouncement} className="w-full mt-2 py-1 bg-yellow-600 rounded">Post</button>
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>
