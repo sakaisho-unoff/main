@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Firebase Chat (Compat)</title>
+  <title>Firebase Chat (Username Login)</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
@@ -25,7 +25,6 @@
   <script type="text/babel">
 const { useState, useEffect } = React;
 
-// --- Firebase setup (互換版) ---
 const firebaseConfig = {
   apiKey: "AIzaSyAZsF7_B7FaM_oLDHbLXO0HEB-QEOccN2o",
   authDomain: "pages-4fe21.firebaseapp.com",
@@ -43,15 +42,23 @@ const db = firebase.database();
 
 function App() {
   const [user, setUser] = useState(null);
+  const [username, setUsername] = useState("");
   const [channels, setChannels] = useState([]);
   const [selectedChannel, setSelectedChannel] = useState(null);
   const [messages, setMessages] = useState([]);
   const [announcement, setAnnouncement] = useState(null);
 
   useEffect(() => {
-    const unsub = auth.onAuthStateChanged(u => {
+    const unsub = auth.onAuthStateChanged(async u => {
       setUser(u);
-      if (u) loadChannels();
+      if (u) {
+        // ユーザー名をDBから取得
+        const snap = await db.ref(`users/${u.uid}/username`).get();
+        setUsername(snap.val());
+        loadChannels();
+      } else {
+        setUsername("");
+      }
     });
     return () => unsub();
   }, []);
@@ -81,21 +88,23 @@ function App() {
   const sendMessage = text => {
     if (!user || !selectedChannel) return;
     db.ref(`messages/${selectedChannel}`).push({
-      by: user.email,
+      by: username,
       text,
       ts: Date.now()
     });
   };
 
+  const logout = () => auth.signOut();
+
   return (
     <div className="max-w-6xl mx-auto grid grid-cols-12 gap-6">
       <div className="col-span-12 md:col-span-3 glass rounded-2xl p-4">
-        <Header user={user}/>
+        <Header username={username} onLogout={logout}/>
         <hr className="my-3 border-white/10" />
         {user
           ? <React.Fragment>
               <Channels channels={channels} selected={selectedChannel} onSelect={setSelectedChannel} />
-              {user.email === "admin@chat.local" && <AdminPanel />}
+              {username === "Admin" && <AdminPanel />}
             </React.Fragment>
           : <AuthBox />
         }
@@ -116,38 +125,42 @@ function App() {
             </div>
           ))}
         </div>
-        <Composer onSend={sendMessage}/>
+        {user && <Composer onSend={sendMessage}/>}
       </div>
     </div>
   );
 }
 
-function Header({user}) {
+function Header({username, onLogout}) {
   return (
-    <div>
+    <div className="flex justify-between items-center">
       <h1 className="text-xl font-bold">Firebase Chat</h1>
-      {user
-        ? <div className="mt-2">
-            <div className="text-sm text-white/70">{user.email}</div>
-          </div>
-        : <div className="text-sm text-white/60">Please login</div>}
+      {username && (
+        <button onClick={onLogout} className="text-sm bg-red-600 px-2 py-1 rounded hover:bg-red-700">
+          Logout
+        </button>
+      )}
     </div>
   );
 }
 
 function AuthBox() {
   const [mode, setMode] = useState("login");
-  const [email, setEmail] = useState("");
+  const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
 
   const submit = async () => {
     try {
       setError("");
-      if (mode === "login")
-        await auth.signInWithEmailAndPassword(email, password);
-      else
-        await auth.createUserWithEmailAndPassword(email, password);
+      const fakeEmail = `${username}@chat.local`;
+
+      if (mode === "login") {
+        await auth.signInWithEmailAndPassword(fakeEmail, password);
+      } else {
+        const userCred = await auth.createUserWithEmailAndPassword(fakeEmail, password);
+        await db.ref(`users/${userCred.user.uid}`).set({ username });
+      }
     } catch (e) {
       setError(e.message);
     }
@@ -159,11 +172,11 @@ function AuthBox() {
         <button onClick={()=>setMode('login')} className={`flex-1 py-1 rounded ${mode==='login'?'bg-white/10':''}`}>Login</button>
         <button onClick={()=>setMode('register')} className={`flex-1 py-1 rounded ${mode==='register'?'bg-white/10':''}`}>Register</button>
       </div>
-      <input value={email} onChange={e=>setEmail(e.target.value)} placeholder="Email" className="w-full mt-2 px-3 py-2 rounded bg-white/10"/>
+      <input value={username} onChange={e=>setUsername(e.target.value)} placeholder="Username" className="w-full mt-2 px-3 py-2 rounded bg-white/10"/>
       <input value={password} onChange={e=>setPassword(e.target.value)} type="password" placeholder="Password" className="w-full mt-2 px-3 py-2 rounded bg-white/10"/>
       {error && <div className="text-xs text-red-400 mt-1">{error}</div>}
       <button onClick={submit} className="w-full mt-3 py-2 rounded bg-indigo-600">{mode==='login'?'Login':'Register'}</button>
-      <div className="text-xs text-white/60 mt-2">Admin user: admin@chat.local / AdminPassword</div>
+      <div className="text-xs text-white/60 mt-2">Admin user: Admin / AdminPassword</div>
     </div>
   );
 }
