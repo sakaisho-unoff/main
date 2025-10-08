@@ -3,13 +3,13 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Firebase Chat (Username Login)</title>
+  <title>Firebase Chat (Full)</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
   <script src="https://unpkg.com/babel-standalone@6/babel.min.js"></script>
 
-  <!-- ✅ Firebase 互換SDK (v9 compat) -->
+  <!-- Firebase compat SDK -->
   <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-auth-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-database-compat.js"></script>
@@ -17,14 +17,16 @@
   <style>
     body { background: linear-gradient(180deg,#0f172a 0%, #071032 100%); color:white; }
     .glass { background: rgba(255,255,255,0.05); backdrop-filter: blur(8px); }
+    .scroll-auto { overflow-y:auto; }
   </style>
 </head>
 <body class="min-h-screen p-6">
   <div id="root"></div>
 
   <script type="text/babel">
-const { useState, useEffect } = React;
+const { useState, useEffect, useRef } = React;
 
+// Firebase config
 const firebaseConfig = {
   apiKey: "AIzaSyAZsF7_B7FaM_oLDHbLXO0HEB-QEOccN2o",
   authDomain: "pages-4fe21.firebaseapp.com",
@@ -40,6 +42,7 @@ firebase.initializeApp(firebaseConfig);
 const auth = firebase.auth();
 const db = firebase.database();
 
+// App component
 function App() {
   const [user, setUser] = useState(null);
   const [username, setUsername] = useState("");
@@ -52,10 +55,17 @@ function App() {
     const unsub = auth.onAuthStateChanged(async u => {
       setUser(u);
       if (u) {
-        // ユーザー名をDBから取得
-        const snap = await db.ref(`users/${u.uid}/username`).get();
-        setUsername(snap.val());
-        loadChannels();
+        const snap = await db.ref(`users/${u.uid}`).get();
+        if (snap.exists()) {
+          const data = snap.val();
+          if (data.banned) {
+            alert("あなたはBANされています");
+            auth.signOut();
+            return;
+          }
+          setUsername(data.username);
+          loadChannels();
+        }
       } else {
         setUsername("");
       }
@@ -72,15 +82,27 @@ function App() {
     });
   };
 
+  // Messages listener
+  const messagesEndRef = useRef(null);
   useEffect(() => {
     if (!selectedChannel) return;
-    db.ref(`messages/${selectedChannel}`).on("value", snap => {
+    const ref = db.ref(`messages/${selectedChannel}`);
+    ref.on("value", snap => {
       const val = snap.val() || {};
       const arr = Object.entries(val).map(([id, m]) => ({ id, ...m }));
       setMessages(arr);
+      scrollToBottom();
+      // 既読登録
+      if (user) db.ref(`users/${user.uid}/lastRead/${selectedChannel}`).set(arr.length ? arr[arr.length-1].id : "");
     });
-  }, [selectedChannel]);
+    return () => ref.off();
+  }, [selectedChannel, user]);
 
+  const scrollToBottom = () => {
+    setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 50);
+  };
+
+  // Announcement
   useEffect(() => {
     db.ref("announcement").on("value", snap => setAnnouncement(snap.val()));
   }, []);
@@ -117,13 +139,14 @@ function App() {
             <div className="text-sm">{announcement.text}</div>
           </div>
         )}
-        <div className="flex-1 overflow-auto p-3 bg-white/5 rounded-lg">
+        <div className="flex-1 p-3 bg-white/5 rounded-lg scroll-auto">
           {messages.map(m => (
             <div key={m.id} className="mb-2">
               <div className="text-xs text-white/60">{m.by} - {new Date(m.ts).toLocaleTimeString()}</div>
               <div>{m.text}</div>
             </div>
           ))}
+          <div ref={messagesEndRef}></div>
         </div>
         {user && <Composer onSend={sendMessage}/>}
       </div>
@@ -131,9 +154,10 @@ function App() {
   );
 }
 
+// Header
 function Header({username, onLogout}) {
   return (
-    <div className="flex justify-between items-center">
+    <div className="flex justify-between items-center mb-2">
       <h1 className="text-xl font-bold">Firebase Chat</h1>
       {username && (
         <button onClick={onLogout} className="text-sm bg-red-600 px-2 py-1 rounded hover:bg-red-700">
@@ -144,10 +168,12 @@ function Header({username, onLogout}) {
   );
 }
 
+// AuthBox with invite code
 function AuthBox() {
   const [mode, setMode] = useState("login");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [inviteCode, setInviteCode] = useState("");
   const [error, setError] = useState("");
 
   const submit = async () => {
@@ -155,15 +181,22 @@ function AuthBox() {
       setError("");
       const fakeEmail = `${username}@chat.local`;
 
+      if (mode === "register") {
+        // 招待コードチェック
+        const snap = await db.ref(`inviteCodes/${inviteCode}`).get();
+        if (!snap.exists() || !snap.val().valid) {
+          setError("無効な招待コードです");
+          return;
+        }
+      }
+
       if (mode === "login") {
         await auth.signInWithEmailAndPassword(fakeEmail, password);
       } else {
         const userCred = await auth.createUserWithEmailAndPassword(fakeEmail, password);
-        await db.ref(`users/${userCred.user.uid}`).set({ username });
+        await db.ref(`users/${userCred.user.uid}`).set({ username, banned:false });
       }
-    } catch (e) {
-      setError(e.message);
-    }
+    } catch (e) { setError(e.message); }
   };
 
   return (
@@ -174,13 +207,15 @@ function AuthBox() {
       </div>
       <input value={username} onChange={e=>setUsername(e.target.value)} placeholder="Username" className="w-full mt-2 px-3 py-2 rounded bg-white/10"/>
       <input value={password} onChange={e=>setPassword(e.target.value)} type="password" placeholder="Password" className="w-full mt-2 px-3 py-2 rounded bg-white/10"/>
+      {mode==='register' && <input value={inviteCode} onChange={e=>setInviteCode(e.target.value)} placeholder="Invite code" className="w-full mt-2 px-3 py-2 rounded bg-white/10"/>}
       {error && <div className="text-xs text-red-400 mt-1">{error}</div>}
       <button onClick={submit} className="w-full mt-3 py-2 rounded bg-indigo-600">{mode==='login'?'Login':'Register'}</button>
-      <div className="text-xs text-white/60 mt-2">Admin user: Admin / AdminPassword</div>
+      <div className="text-xs text-white/60 mt-2">Admin: Admin / AdminPassword</div>
     </div>
   );
 }
 
+// Channels
 function Channels({channels, selected, onSelect}) {
   return (
     <div className="mt-3">
@@ -194,13 +229,10 @@ function Channels({channels, selected, onSelect}) {
   );
 }
 
+// Composer
 function Composer({onSend}) {
   const [text, setText] = useState("");
-  const send = () => {
-    if (!text.trim()) return;
-    onSend(text.trim());
-    setText("");
-  };
+  const send = () => { if(text.trim()){onSend(text.trim()); setText("");} };
   return (
     <div className="mt-3 flex gap-2">
       <input value={text} onChange={e=>setText(e.target.value)} onKeyDown={e=>e.key==='Enter'&&send()} placeholder="Type a message..." className="flex-1 px-3 py-2 rounded bg-white/10"/>
@@ -209,20 +241,31 @@ function Composer({onSend}) {
   );
 }
 
+// Admin panel
 function AdminPanel() {
-  const [channelName, setChannelName] = useState("");
-  const [announce, setAnnounce] = useState("");
+  const [channelName,setChannelName]=useState("");
+  const [announce,setAnnounce]=useState("");
+  const [users,setUsers]=useState([]);
+  const [invite,setInvite]=useState("");
 
-  const addChannel = () => {
-    const id = db.ref("channels").push().key;
-    db.ref("channels/"+id).set({ name: channelName });
-    setChannelName("");
-  };
+  useEffect(()=>{
+    db.ref("users").on("value",snap=>{
+      const val=snap.val()||{};
+      const arr=Object.entries(val).map(([uid,data])=>({uid,...data}));
+      setUsers(arr);
+    });
+  },[]);
 
-  const postAnnouncement = () => {
-    db.ref("announcement").set({ text: announce, ts: Date.now() });
-    setAnnounce("");
+  const addChannel=()=>{ if(channelName){ const id=db.ref("channels").push().key; db.ref("channels/"+id).set({name:channelName}); setChannelName("");} };
+  const postAnnouncement=()=>{ if(announce){ db.ref("announcement").set({text:announce, ts:Date.now()}); setAnnounce(""); } };
+  const banUser=(uid)=>{ db.ref(`users/${uid}/banned`).set(true); };
+  const deleteUser=async(uid)=>{
+    try{
+      await db.ref(`users/${uid}`).remove();
+      alert("ユーザーを削除しました (Auth削除は管理者コンソールで実施)");
+    }catch(e){alert(e.message);}
   };
+  const addInviteCode=()=>{ if(invite){ db.ref(`inviteCodes/${invite}`).set({valid:true}); setInvite(""); alert("招待コード追加"); }};
 
   return (
     <div className="mt-4 p-3 bg-white/5 rounded-lg space-y-3">
@@ -235,6 +278,25 @@ function AdminPanel() {
         <div className="text-sm font-semibold mb-1">Announcement</div>
         <textarea value={announce} onChange={e=>setAnnounce(e.target.value)} className="w-full p-2 rounded bg-white/10"></textarea>
         <button onClick={postAnnouncement} className="w-full mt-2 py-1 bg-yellow-600 rounded">Post</button>
+      </div>
+      <div>
+        <div className="text-sm font-semibold mb-1">Invite Code</div>
+        <input value={invite} onChange={e=>setInvite(e.target.value)} placeholder="Code" className="w-full px-2 py-1 rounded bg-white/10"/>
+        <button onClick={addInviteCode} className="w-full mt-2 py-1 bg-green-600 rounded">Add Code</button>
+      </div>
+      <div>
+        <div className="text-sm font-semibold mb-1">Users</div>
+        <div className="space-y-1 max-h-40 overflow-auto">
+          {users.map(u=>(
+            <div key={u.uid} className="flex justify-between items-center bg-white/5 px-2 py-1 rounded">
+              <span>{u.username} {u.banned?"(Banned)":""}</span>
+              <div className="flex gap-1">
+                {!u.banned && <button onClick={()=>banUser(u.uid)} className="bg-red-600 px-1 rounded text-xs">BAN</button>}
+                <button onClick={()=>deleteUser(u.uid)} className="bg-gray-600 px-1 rounded text-xs">Delete</button>
+              </div>
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   );
